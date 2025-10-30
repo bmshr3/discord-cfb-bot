@@ -3,13 +3,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from aiohttp import ClientSession
-from datetime import datetime
+from datetime import datetime, timezone  # ← Added timezone
 from dotenv import load_dotenv
 import asyncio
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = 1289678925055660084  # Replace if needed
+CHANNEL_ID = 1289678925055660084  # ← Double-check this is your channel
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
@@ -39,12 +39,67 @@ async def on_ready():
     except Exception as e:
         print(f"Sync failed: {e}")
 
+    # ← START AUTO-POSTING FINAL SCORES
+    bot.loop.create_task(monitor_final_scores())
+    print("Final score monitor started")
+
+
+# === AUTO-POST FINAL SCORES ===
+final_games = set()  # Track posted game IDs
+
+async def monitor_final_scores():
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        print(f"ERROR: Channel {CHANNEL_ID} not found! Check ID and bot permissions.")
+        return
+    else:
+        print(f"Auto-posting to: #{channel.name} in {channel.guild.name}")
+
+    await bot.wait_until_ready()
+    print("Final score monitor is running...")
+
+    while not bot.is_closed():
+        try:
+            data = await fetch_espn_scoreboard()
+            games = data.get("events", [])
+
+            for game in games:
+                game_id = game["id"]
+                competition = game["competitions"][0]
+                status = competition["status"]["type"]["description"]
+                competitors = competition["competitors"]
+                home = competitors[0]
+                away = competitors[1]
+
+                if "Final" in status and game_id not in final_games:
+                    home_name = home["team"]["displayName"]
+                    away_name = away["team"]["displayName"]
+                    home_score = home.get("score", "0")
+                    away_score = away.get("score", "0")
+
+                    embed = discord.Embed(
+                        title=f"FINAL: {away_name} @ {home_name}",
+                        description=f"**{away_score} – {home_score}**",
+                        color=discord.Color.red(),
+                    )
+                    embed.set_footer(text="Data from ESPN")
+                    await channel.send(embed=embed)
+
+                    final_games.add(game_id)
+                    print(f"Posted final: {away_name} @ {home_name}")
+
+        except Exception as e:
+            print(f"Final monitor error: {e}")
+
+        await asyncio.sleep(60)  # Check every minute
+
+
 # === /cfbscore team:Alabama (PUBLIC, NO DEFER) ===
 @tree.command(name="cfbscore", description="Check the live or final score of a specific FBS team.")
 async def cfbscore(interaction: discord.Interaction, team: str):
     # No defer — send immediately (fast fetch)
     try:
-        data = await asyncio.wait_for(fetch_espn_scoreboard(), timeout=5.0)  # Shorter timeout
+        data = await asyncio.wait_for(fetch_espn_scoreboard(), timeout=5.0)
         games = data.get("events", [])
 
         for game in games:
@@ -66,7 +121,7 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                     color=discord.Color.blue(),
                 )
                 embed.set_footer(text="Data from ESPN")
-                await interaction.response.send_message(embed=embed)  # Immediate, public
+                await interaction.response.send_message(embed=embed)  # Public
                 return
 
         await interaction.response.send_message("No current or recent game found for that team.")
@@ -75,6 +130,7 @@ async def cfbscore(interaction: discord.Interaction, team: str):
         await interaction.response.send_message("ESPN is slow — try again in a minute.")
     except Exception as e:
         await interaction.response.send_message(f"Error: {e}")
+
 
 # === /cfbboard ===
 @tree.command(name="cfbboard", description="View all FBS games for today (Final, Live, Upcoming).")
@@ -89,7 +145,7 @@ async def cfbboard(interaction: discord.Interaction):
             await interaction.followup.send("No FBS games found today.", ephemeral=True)
             return
 
-        today = datetime.utcnow().strftime("%B %d, %Y")
+        today = datetime.now(timezone.UTC).strftime("%B %d, %Y")  # ← Fixed: no deprecation
         embed = discord.Embed(
             title=f"College Football Scoreboard – {today}",
             color=discord.Color.green(),
@@ -100,12 +156,12 @@ async def cfbboard(interaction: discord.Interaction):
             competitors = competition["competitors"]
             status = competition["status"]["type"]["description"]
             date_str = competition.get("date", "")
-            start_time = ""
+            start_time = "Time TBD"
             if date_str:
                 try:
                     start_time = datetime.fromisoformat(date_str.replace("Z", "+00:00")).strftime("%I:%M %p ET")
                 except:
-                    start_time = "Time TBD"
+                    pass
 
             home = competitors[0]
             away = competitors[1]
@@ -115,7 +171,7 @@ async def cfbboard(interaction: discord.Interaction):
             home_score = home.get("score", "0")
             away_score = away.get("score", "0")
 
-            emoji = "Final" in status and "Final" or ("in" in status.lower() or "q" in status.lower()) and "Live" or "Upcoming"
+            emoji = "Final" if "Final" in status else "Live" if ("in" in status.lower() or "q" in status.lower()) else "Upcoming"
 
             value = f"{away_score} - {home_score} ({status if 'TBD' not in status else start_time})"
             embed.add_field(name=f"{emoji} {away_team} @ {home_team}", value=value, inline=False)
@@ -128,7 +184,8 @@ async def cfbboard(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-# === /cfbrankings (FIXED) ===
+
+# === /cfbrankings ===
 @tree.command(name="cfbrankings", description="Show the latest AP Top 25 college football rankings.")
 async def cfbrankings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -146,7 +203,7 @@ async def cfbrankings(interaction: discord.Interaction):
 
         for team in ap_poll["ranks"][:25]:
             rank = team["current"]
-            school = team["team"]["displayName"]  # ← FIXED: displayName, not displayname
+            school = team["team"]["displayName"]
             record = team.get("recordSummary", "—")
             embed.add_field(name=f"{rank}. {school}", value=record, inline=False)
 
@@ -158,10 +215,12 @@ async def cfbrankings(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
+
 # === ERROR HANDLER ===
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     await interaction.followup.send(f"Command failed: {error}", ephemeral=True)
+
 
 # === RUN BOT ===
 bot.run(DISCORD_TOKEN)
