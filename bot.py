@@ -39,10 +39,10 @@ async def on_ready():
     except Exception as e:
         print(f"Sync failed: {e}")
 
-# === /cfbscore team:Alabama ===
+# === /cfbscore team:Alabama (PUBLIC) ===
 @tree.command(name="cfbscore", description="Check the live or final score of a specific FBS team.")
 async def cfbscore(interaction: discord.Interaction, team: str):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()  # ← NO ephemeral=True → shows "thinking..." publicly
 
     try:
         data = await asyncio.wait_for(fetch_espn_scoreboard(), timeout=10.0)
@@ -67,15 +67,15 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                     color=discord.Color.blue(),
                 )
                 embed.set_footer(text="Data from ESPN")
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed)  # ← NO ephemeral=True → PUBLIC
                 return
 
-        await interaction.followup.send("No current or recent game found for that team.", ephemeral=True)
+        await interaction.followup.send("No current or recent game found for that team.")  # ← PUBLIC
 
     except asyncio.TimeoutError:
-        await interaction.followup.send("ESPN is slow — try again in a minute.", ephemeral=True)
+        await interaction.followup.send("ESPN is slow — try again in a minute.")
     except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Error: {e}")
 
 # === /cfbboard ===
 @tree.command(name="cfbboard", description="View all FBS games for today (Final, Live, Upcoming).")
@@ -129,7 +129,7 @@ async def cfbboard(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-# === /cfbrankings ===
+# === /cfbrankings (FIXED) ===
 @tree.command(name="cfbrankings", description="Show the latest AP Top 25 college football rankings.")
 async def cfbrankings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -147,7 +147,7 @@ async def cfbrankings(interaction: discord.Interaction):
 
         for team in ap_poll["ranks"][:25]:
             rank = team["current"]
-            school = team["team"]["displayName"]
+            school = team["team"]["displayName"]  # ← FIXED: displayName, not displayname
             record = team.get("recordSummary", "—")
             embed.add_field(name=f"{rank}. {school}", value=record, inline=False)
 
