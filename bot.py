@@ -39,13 +39,12 @@ async def on_ready():
     except Exception as e:
         print(f"Sync failed: {e}")
 
-# === /cfbscore team:Alabama (PUBLIC) ===
+# === /cfbscore team:Alabama (PUBLIC, NO DEFER) ===
 @tree.command(name="cfbscore", description="Check the live or final score of a specific FBS team.")
 async def cfbscore(interaction: discord.Interaction, team: str):
-    await interaction.response.defer()  # ← NO ephemeral=True → shows "thinking..." publicly
-
+    # No defer — send immediately (fast fetch)
     try:
-        data = await asyncio.wait_for(fetch_espn_scoreboard(), timeout=10.0)
+        data = await asyncio.wait_for(fetch_espn_scoreboard(), timeout=5.0)  # Shorter timeout
         games = data.get("events", [])
 
         for game in games:
@@ -67,15 +66,15 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                     color=discord.Color.blue(),
                 )
                 embed.set_footer(text="Data from ESPN")
-                await interaction.followup.send(embed=embed)  # ← NO ephemeral=True → PUBLIC
+                await interaction.response.send_message(embed=embed)  # Immediate, public
                 return
 
-        await interaction.followup.send("No current or recent game found for that team.")  # ← PUBLIC
+        await interaction.response.send_message("No current or recent game found for that team.")
 
     except asyncio.TimeoutError:
-        await interaction.followup.send("ESPN is slow — try again in a minute.")
+        await interaction.response.send_message("ESPN is slow — try again in a minute.")
     except Exception as e:
-        await interaction.followup.send(f"Error: {e}")
+        await interaction.response.send_message(f"Error: {e}")
 
 # === /cfbboard ===
 @tree.command(name="cfbboard", description="View all FBS games for today (Final, Live, Upcoming).")
