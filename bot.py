@@ -6,24 +6,23 @@ from aiohttp import ClientSession
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 import asyncio
-import json  # For safe parsing
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CFBD_API_KEY = os.getenv("CFBD_API_KEY")  # ← Your new API key
+CFBD_API_KEY = os.getenv("CFBD_API_KEY")  # Your CFBD key
 CHANNEL_ID = 1289678925055660084  # Your channel
-GUILD_ID = 1204169619112464404  # ← Replace with your Discord server ID for fast sync
+GUILD_ID = 1204169619112464404  # ← REPLACE with your Discord server ID (right-click server → Copy ID)
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
-# Helper: Fetch CFBD games (scoreboard)
+# Helper: Fetch CFBD games (scoreboard) — FBS only
 async def fetch_cfbd_games(year=None, season_type="regular"):
     if not year:
-        year = datetime.now(timezone.UTC).year
+        year = datetime.utcnow().year  # Fallback to utcnow
     url = f"https://api.collegefootballdata.com/games"
-    params = {"year": year, "season_type": season_type}
+    params = {"year": year, "season_type": season_type, "division": "fbs"}  # ← FBS filter
     headers = {"Authorization": f"Bearer {CFBD_API_KEY}"}
     async with ClientSession() as session:
         async with session.get(url, params=params, headers=headers) as resp:
@@ -34,9 +33,9 @@ async def fetch_cfbd_games(year=None, season_type="regular"):
 # Helper: Fetch CFBD rankings
 async def fetch_cfbd_rankings(year=None, week=None, poll="AP"):
     if not year:
-        year = datetime.now(timezone.UTC).year
+        year = datetime.utcnow().year  # Fallback
     if not week:
-        week = get_current_week(year)  # Define below
+        week = get_current_week(year)
     url = "https://api.collegefootballdata.com/rankings"
     params = {"year": year, "week": week, "poll": poll}
     headers = {"Authorization": f"Bearer {CFBD_API_KEY}"}
@@ -48,10 +47,10 @@ async def fetch_cfbd_rankings(year=None, week=None, poll="AP"):
 
 # Helper: Get current week (rough estimate)
 def get_current_week(year):
-    now = datetime.now(timezone.UTC)
+    now = datetime.utcnow()
     if now.month < 9:
         return 1  # Off-season
-    week = max(1, min(15, int((now - datetime(year, 9, 1, tzinfo=timezone.UTC)).days / 7) + 1))
+    week = max(1, min(15, int((now - datetime(year, 9, 1)).days / 7) + 1))
     return week
 
 # === ON READY ===
@@ -73,7 +72,7 @@ async def on_ready():
     bot.loop.create_task(monitor_final_scores())
     print("Final score monitor started")
 
-# === AUTO-POST FINAL SCORES (Updated for CFBD) ===
+# === AUTO-POST FINAL SCORES (CFBD) ===
 final_games = set()  # Track posted game IDs
 
 async def monitor_final_scores():
@@ -92,11 +91,11 @@ async def monitor_final_scores():
             games = await fetch_cfbd_games()
             for game in games:
                 game_id = game["id"]
-                status = game.get("status", {}).get("type", {}).get("description", "")
+                status = game.get("status", {}).get("type", {}).get("description", "").lower()
                 home = game.get("home_team", {})
                 away = game.get("away_team", {})
 
-                if "completed" in status.lower() and game_id not in final_games:  # CFBD uses "completed"
+                if "completed" in status and game_id not in final_games:
                     home_name = home.get("school", "Unknown")
                     away_name = away.get("school", "Unknown")
                     home_score = str(game.get("home_points", 0))
@@ -160,7 +159,7 @@ async def cfbboard(interaction: discord.Interaction):
             await interaction.followup.send("No FBS games found.", ephemeral=True)
             return
 
-        today = datetime.now(timezone.UTC).strftime("%B %d, %Y")
+        today = datetime.utcnow().strftime("%B %d, %Y")  # ← Fixed: utcnow fallback
         embed = discord.Embed(
             title=f"College Football Scoreboard – {today}",
             color=discord.Color.green(),
@@ -173,10 +172,10 @@ async def cfbboard(interaction: discord.Interaction):
             away_name = away.get("school", "Unknown")
             home_score = str(game.get("home_points", 0))
             away_score = str(game.get("away_points", 0))
-            status = game.get("status", {}).get("type", {}).get("description", "Scheduled")
+            status = game.get("status", {}).get("type", {}).get("description", "Scheduled").lower()
 
-            emoji = "Final" if "completed" in status.lower() else "Live" if "in progress" in status.lower() else "Upcoming"
-            value = f"{away_score} - {home_score} ({status})"
+            emoji = "Final" if "completed" in status else "Live" if "in progress" in status else "Upcoming"
+            value = f"{away_score} - {home_score} ({status.title()})"
             embed.add_field(name=f"{emoji} {away_name} @ {home_name}", value=value, inline=False)
 
         embed.set_footer(text="Data from CFBD")
@@ -187,7 +186,7 @@ async def cfbboard(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-# === /cfbrankings ===
+# === /cfbrankings (FIXED: Use "school") ===
 @tree.command(name="cfbrankings", description="Show the latest AP Top 25 college football rankings.")
 async def cfbrankings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -202,7 +201,7 @@ async def cfbrankings(interaction: discord.Interaction):
 
         for rank_item in rankings[:25]:
             rank = rank_item.get("rank", "?")
-            school = rank_item.get("school", "Unknown")
+            school = rank_item.get("school", "Unknown")  # ← FIXED: "school" not "displayName"
             record = rank_item.get("record", "—")
             embed.add_field(name=f"{rank}. {school}", value=record, inline=False)
 
