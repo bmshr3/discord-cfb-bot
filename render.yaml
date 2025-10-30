@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: discord-cfb-bot
+    runtime: python
+    plan: starter
+    region: ohio
+
+    buildCommand: |
+      python -m venv .venv &&
+      .venv/bin/pip install --upgrade pip &&
+      .venv/bin/pip install -r requirements.txt
+
+    startCommand: .venv/bin/python bot.py
+
+    envVars:
+      DISCORD_TOKEN:
+        fromDatabase:
+          name: DISCORD_TOKEN
+          key: value
+
+# This forces Python 3.12 (fixes audioop error)
+python:
+  version: 3.12
