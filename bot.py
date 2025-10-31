@@ -17,7 +17,7 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
-# Helper: Fetch CFBD games (FBS only, filter for today/upcoming)
+# Helper: Fetch CFBD games (FBS only, filter for today/upcoming — FIXED date match)
 async def fetch_cfbd_games(year=None, season_type="regular"):
     if not year:
         year = datetime.utcnow().year
@@ -29,21 +29,20 @@ async def fetch_cfbd_games(year=None, season_type="regular"):
             if resp.status == 401:
                 raise ValueError("Invalid CFBD API key — check env var")
             data = await resp.json()
-            # Filter for games starting today or later
-            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            # Filter for games starting today or later — FIXED: Parse date only
+            today = datetime.utcnow().date()
             recent_games = []
             for g in data:
                 start_date_str = g.get("start_date", "")
-                if start_date_str.startswith(today_str):
-                    recent_games.append(g)
-                else:
+                if start_date_str:
                     try:
-                        game_date = datetime.strptime(start_date_str, "%Y-%m-%dT%H:%M:%SZ")
-                        if game_date >= datetime.utcnow():
+                        # Parse full ISO timestamp, compare dates only
+                        game_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00')).date()
+                        if game_date >= today:
                             recent_games.append(g)
                     except ValueError:
                         pass  # Skip invalid dates
-            # Sort by start_date (newest first)
+            # Sort by start_date (newest first — prioritizes live/upcoming)
             recent_games.sort(key=lambda g: g.get("start_date", "2025-01-01"), reverse=True)
             return recent_games
 
@@ -111,7 +110,7 @@ async def monitor_final_scores():
 
         await asyncio.sleep(60)  # Check every minute
 
-# === /cfbscore team:Alabama (PUBLIC, NO DEFER) ===
+# === /cfbscore team:UTSA (PUBLIC, NO DEFER) ===
 @tree.command(name="cfbscore", description="Check the live or final score of a specific FBS team.")
 async def cfbscore(interaction: discord.Interaction, team: str):
     try:
@@ -135,7 +134,7 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                 await interaction.response.send_message(embed=embed)  # Public
                 return
 
-        await interaction.response.send_message("No current or recent game found for that team. Try 'UTSA' or 'Liberty' for today's games.")
+        await interaction.response.send_message("No current or recent game found for that team. Try 'Tulane' for tonight's matchup.")
 
     except asyncio.TimeoutError:
         await interaction.response.send_message("CFBD is slow — try again in a minute.")
