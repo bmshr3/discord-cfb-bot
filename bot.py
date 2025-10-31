@@ -10,17 +10,32 @@ import asyncio
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = 1289678925055660084  # Your channel
-GUILD_ID = 1204169619112464404  # ← REPLACE with your Discord server ID (right-click server → Copy ID)
+GUILD_ID = 1204169619112464404  # Your server ID
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
-# Helper: Fetch ESPN scoreboard (full current week — includes all Thu-Sun games)
+# Helper: Fetch ESPN scoreboard (Thu-Sun this week — FORCES full weekend)
 async def fetch_espn_scoreboard():
     url = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+
+    # Auto-calculate this week's Thursday → next Monday
+    now = datetime.utcnow()
+    weekday = now.weekday()  # 0=Mon, 3=Thu, 6=Sun
+    thursday = now - timedelta(days=(weekday - 3) % 7)  # This week's Thursday
+    next_monday = thursday + timedelta(days=4)  # Monday after Sunday
+
+    # Format: YYYYMMDD-YYYYMMDD
+    dates = f"{thursday.strftime('%Y%m%d')}-{next_monday.strftime('%Y%m%d')}"
+
+    params = {"dates": dates}
+
     async with ClientSession() as session:
-        async with session.get(url) as resp:
+        async with session.get(url, params=params) as resp:
+            if resp.status != 200:
+                print(f"ESPN API error: {resp.status}")
+                return {"events": []}
             return await resp.json()
 
 # === ON READY ===
@@ -28,33 +43,30 @@ async def fetch_espn_scoreboard():
 async def on_ready():
     print(f"Logged in as {bot.user}")
     try:
-        # Fast sync to your guild (instant) + global (1hr)
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             await tree.sync(guild=guild)
             print(f"Synced {len(await tree.fetch_guild_commands(guild))} commands to guild {GUILD_ID}")
-        await tree.sync()  # Global sync
+        await tree.sync()
         print(f"Synced {len(await tree.fetch_global_commands())} global commands")
     except Exception as e:
         print(f"Sync failed: {e}")
 
-    # Start auto-posting final scores
     bot.loop.create_task(monitor_final_scores())
     print("Final score monitor started")
 
 # === AUTO-POST FINAL SCORES (ESPN) ===
-final_games = set()  # Track posted game IDs
+final_games = set()
 
 async def monitor_final_scores():
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
-        print(f"ERROR: Channel {CHANNEL_ID} not found! Check ID and bot permissions.")
+        print(f"ERROR: Channel {CHANNEL_ID} not found!")
         return
-    else:
-        print(f"Auto-posting to: #{channel.name} in {channel.guild.name}")
+    print(f"Auto-posting to: #{channel.name}")
 
     await bot.wait_until_ready()
-    print("Final score monitor is running...")
+    print("Final monitor running...")
 
     while not bot.is_closed():
         try:
@@ -88,7 +100,7 @@ async def monitor_final_scores():
         except Exception as e:
             print(f"Final monitor error: {e}")
 
-        await asyncio.sleep(60)  # Check every minute
+        await asyncio.sleep(60)
 
 # === /cfbscore team:Alabama (PUBLIC, SHOWS SCHEDULED GAMES) ===
 @tree.command(name="cfbscore", description="Check the live, final, or scheduled score of a specific FBS team.")
@@ -102,7 +114,6 @@ async def cfbscore(interaction: discord.Interaction, team: str):
             home = competitors[0]
             away = competitors[1]
 
-            # Match team name
             if team.lower() in home["team"]["displayName"].lower() or team.lower() in away["team"]["displayName"].lower():
                 home_name = home["team"]["displayName"]
                 away_name = away["team"]["displayName"]
@@ -110,7 +121,6 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                 away_score = away.get("score", "0")
                 status = competition["status"]["type"]["description"]
 
-                # Format game time if scheduled
                 game_time = ""
                 if "Scheduled" in status:
                     try:
@@ -126,7 +136,7 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                     color=discord.Color.blue(),
                 )
                 embed.set_footer(text="Data from ESPN")
-                await interaction.response.send_message(embed=embed)  # Public
+                await interaction.response.send_message(embed=embed)
                 return
 
         await interaction.response.send_message("No game found for that team this weekend.")
