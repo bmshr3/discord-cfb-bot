@@ -186,23 +186,29 @@ async def cfbboard(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-# === /cfbrankings (FIXED: Use "school") ===
+# === /cfbrankings (FIXED: Extract from AP poll ranks) ===
 @tree.command(name="cfbrankings", description="Show the latest AP Top 25 college football rankings.")
 async def cfbrankings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        rankings = await asyncio.wait_for(fetch_cfbd_rankings(), timeout=10.0)
-        if not rankings:
-            await interaction.followup.send("Could not fetch AP Top 25 rankings.", ephemeral=True)
+        rankings_data = await asyncio.wait_for(fetch_cfbd_rankings(), timeout=10.0)
+        if not rankings_data:
+            await interaction.followup.send("No rankings data available.", ephemeral=True)
+            return
+
+        # Find AP Top 25 poll
+        ap_poll = next((p for p in rankings_data if p.get("poll") == "AP Top 25"), None)
+        if not ap_poll or "ranks" not in ap_poll:
+            await interaction.followup.send("AP Top 25 not found in data.", ephemeral=True)
             return
 
         embed = discord.Embed(title="AP Top 25 Rankings", color=discord.Color.gold())
 
-        for rank_item in rankings[:25]:
-            rank = rank_item.get("rank", "?")
-            school = rank_item.get("school", "Unknown")  # ← FIXED: "school" not "displayName"
-            record = rank_item.get("record", "—")
+        for team in ap_poll["ranks"][:25]:
+            rank = team.get("rank", "?")
+            school = team.get("school", "Unknown")
+            record = team.get("record", "—")
             embed.add_field(name=f"{rank}. {school}", value=record, inline=False)
 
         embed.set_footer(text="Data from CFBD")
