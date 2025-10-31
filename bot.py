@@ -115,7 +115,9 @@ async def cfbscore(interaction: discord.Interaction, team: str):
             competitors = competition["competitors"]
             home = competitors[0]
             away = competitors[1]
+            status_info = competition["status"]["type"]
 
+            # Check if team matches home or away
             if team.lower() in home["team"]["displayName"].lower() or team.lower() in away["team"]["displayName"].lower():
                 home_name = home["team"]["displayName"]
                 away_name = away["team"]["displayName"]
@@ -123,32 +125,35 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                 away_logo = away["team"].get("logo", "")
                 home_score = home.get("score", "0")
                 away_score = away.get("score", "0")
-                status = competition["status"]["type"]["description"]
+                status_desc = status_info.get("description", "Unknown")
+                status_state = status_info.get("state", "").lower()
 
-                # Determine if scheduled or live
+                # Determine time in Eastern (convert UTC → ET)
                 game_time = ""
-                if "Scheduled" in status or "TBD" in status:
-                    try:
-                        date_str = competition.get("date", "")
-                        game_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                        game_time = f"🕒 {game_dt.strftime('%a, %I:%M %p ET')}"
-                    except:
-                        game_time = "🕒 Time TBD"
+                try:
+                    date_str = competition.get("date", "")
+                    game_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    # Convert UTC → US Eastern (-4h for EDT / -5h for EST)
+                    et_offset = timedelta(hours=-4)  # Adjust as needed for DST
+                    et_time = (game_dt + et_offset).strftime('%a, %-I:%M %p ET')
+                    game_time = f"🕒 {et_time}"
+                except Exception:
+                    game_time = "🕒 Time TBD"
 
-                # Emoji indicator
-                if "Final" in status:
+                # Determine emoji/status
+                if status_state == "post":
                     emoji = "✅ Final"
-                elif "in" in status or "Q" in status:
+                elif status_state == "in":
                     emoji = "🔴 Live"
                 else:
                     emoji = "⏰ Upcoming"
 
                 embed = discord.Embed(
                     title=f"{emoji}: {away_name} @ {home_name}",
-                    description=f"**{away_score} - {home_score}** ({status})",
+                    description=f"**{away_score} - {home_score}** ({status_desc})",
                     color=discord.Color.blue(),
                 )
-                embed.add_field(name="Kickoff / Status", value=game_time or status, inline=False)
+                embed.add_field(name="Kickoff / Status", value=game_time, inline=False)
                 embed.set_thumbnail(url=home_logo)
                 embed.set_image(url=away_logo)
                 embed.set_footer(text="Data from ESPN")
@@ -164,6 +169,7 @@ async def cfbscore(interaction: discord.Interaction, team: str):
         await interaction.response.send_message("⚠️ ESPN is slow — try again in a minute.")
     except Exception as e:
         await interaction.response.send_message(f"Error: {e}")
+
 
 # === ERROR HANDLER ===
 @tree.error
