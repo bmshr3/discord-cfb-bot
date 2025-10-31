@@ -3,7 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from aiohttp import ClientSession
-from datetime import datetime, timezone
+from datetime import datetime
 from dotenv import load_dotenv
 import asyncio
 
@@ -17,41 +17,35 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
-# Helper: Fetch CFBD games (scoreboard) — FBS only
+# Helper: Fetch CFBD games (FBS only, filter for today/upcoming)
 async def fetch_cfbd_games(year=None, season_type="regular"):
     if not year:
-        year = datetime.utcnow().year  # Fallback to utcnow
+        year = datetime.utcnow().year
     url = f"https://api.collegefootballdata.com/games"
-    params = {"year": year, "season_type": season_type, "division": "fbs"}  # ← FBS filter
+    params = {"year": year, "season_type": season_type, "division": "fbs"}
     headers = {"Authorization": f"Bearer {CFBD_API_KEY}"}
     async with ClientSession() as session:
         async with session.get(url, params=params, headers=headers) as resp:
             if resp.status == 401:
                 raise ValueError("Invalid CFBD API key — check env var")
-            return await resp.json()
-
-# Helper: Fetch CFBD rankings
-async def fetch_cfbd_rankings(year=None, week=None, poll="AP"):
-    if not year:
-        year = datetime.utcnow().year  # Fallback
-    if not week:
-        week = get_current_week(year)
-    url = "https://api.collegefootballdata.com/rankings"
-    params = {"year": year, "week": week, "poll": poll}
-    headers = {"Authorization": f"Bearer {CFBD_API_KEY}"}
-    async with ClientSession() as session:
-        async with session.get(url, params=params, headers=headers) as resp:
-            if resp.status == 401:
-                raise ValueError("Invalid CFBD API key — check env var")
-            return await resp.json()
-
-# Helper: Get current week (rough estimate)
-def get_current_week(year):
-    now = datetime.utcnow()
-    if now.month < 9:
-        return 1  # Off-season
-    week = max(1, min(15, int((now - datetime(year, 9, 1)).days / 7) + 1))
-    return week
+            data = await resp.json()
+            # Filter for games starting today or later
+            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            recent_games = []
+            for g in data:
+                start_date_str = g.get("start_date", "")
+                if start_date_str.startswith(today_str):
+                    recent_games.append(g)
+                else:
+                    try:
+                        game_date = datetime.strptime(start_date_str, "%Y-%m-%dT%H:%M:%SZ")
+                        if game_date >= datetime.utcnow():
+                            recent_games.append(g)
+                    except ValueError:
+                        pass  # Skip invalid dates
+            # Sort by start_date (newest first)
+            recent_games.sort(key=lambda g: g.get("start_date", "2025-01-01"), reverse=True)
+            return recent_games
 
 # === ON READY ===
 @bot.event
@@ -141,83 +135,12 @@ async def cfbscore(interaction: discord.Interaction, team: str):
                 await interaction.response.send_message(embed=embed)  # Public
                 return
 
-        await interaction.response.send_message("No current or recent game found for that team.")
+        await interaction.response.send_message("No current or recent game found for that team. Try 'UTSA' or 'Liberty' for today's games.")
 
     except asyncio.TimeoutError:
         await interaction.response.send_message("CFBD is slow — try again in a minute.")
     except Exception as e:
         await interaction.response.send_message(f"Error: {e}")
-
-# === /cfbboard ===
-@tree.command(name="cfbboard", description="View all FBS games for today (Final, Live, Upcoming).")
-async def cfbboard(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        games = await asyncio.wait_for(fetch_cfbd_games(), timeout=10.0)
-        if not games:
-            await interaction.followup.send("No FBS games found.", ephemeral=True)
-            return
-
-        today = datetime.utcnow().strftime("%B %d, %Y")  # ← Fixed: utcnow fallback
-        embed = discord.Embed(
-            title=f"College Football Scoreboard – {today}",
-            color=discord.Color.green(),
-        )
-
-        for game in games[:20]:  # Limit to recent/relevant
-            home = game.get("home_team", {})
-            away = game.get("away_team", {})
-            home_name = home.get("school", "Unknown")
-            away_name = away.get("school", "Unknown")
-            home_score = str(game.get("home_points", 0))
-            away_score = str(game.get("away_points", 0))
-            status = game.get("status", {}).get("type", {}).get("description", "Scheduled").lower()
-
-            emoji = "Final" if "completed" in status else "Live" if "in progress" in status else "Upcoming"
-            value = f"{away_score} - {home_score} ({status.title()})"
-            embed.add_field(name=f"{emoji} {away_name} @ {home_name}", value=value, inline=False)
-
-        embed.set_footer(text="Data from CFBD")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    except asyncio.TimeoutError:
-        await interaction.followup.send("CFBD is taking too long — try again soon.", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-# === /cfbrankings (FIXED: Extract from AP poll ranks) ===
-@tree.command(name="cfbrankings", description="Show the latest AP Top 25 college football rankings.")
-async def cfbrankings(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        rankings_data = await asyncio.wait_for(fetch_cfbd_rankings(), timeout=10.0)
-        if not rankings_data:
-            await interaction.followup.send("No rankings data available.", ephemeral=True)
-            return
-
-        # Find AP Top 25 poll
-        ap_poll = next((p for p in rankings_data if p.get("poll") == "AP Top 25"), None)
-        if not ap_poll or "ranks" not in ap_poll:
-            await interaction.followup.send("AP Top 25 not found in data.", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="AP Top 25 Rankings", color=discord.Color.gold())
-
-        for team in ap_poll["ranks"][:25]:
-            rank = team.get("rank", "?")
-            school = team.get("school", "Unknown")
-            record = team.get("record", "—")
-            embed.add_field(name=f"{rank}. {school}", value=record, inline=False)
-
-        embed.set_footer(text="Data from CFBD")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    except asyncio.TimeoutError:
-        await interaction.followup.send("Rankings are slow to load — try again.", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 # === ERROR HANDLER ===
 @tree.error
